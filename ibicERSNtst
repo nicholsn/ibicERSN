@@ -1,0 +1,235 @@
+#!/bin/bash
+
+DOTMFILELOCAT="/mnt/home/ibic/bin"
+PURPOSE="Explore-Remove-Scanner-Noise" ;
+PGM="ibicERSN -- Version 2.2" ;
+
+	USAGE(){
+	echo "Program:  ${PGM}"
+	echo "Use this routine to:"
+	echo "	${PURPOSE}"
+	echo "12/28/12 -- Version 2 -- Improved tissue mask"
+	echo "12/29/12 --         2.1  Fixed Batch Processing Bug & added McFlirt"
+	echo "12/29/12 -- 	  2.2  Reworked non-tissue mask"
+	echo "12/30/12		  2.3  Added PowerSpectrum plot"
+	echo "================================================================="
+	echo "Usage: "
+	echo " ibicERSN <File | List> <tr> "
+	echo "   Note: Two parameters required -- don't forget the TR"
+	echo ""
+	echo "For batch mode -- create a text file listing all NIFTI files to process"
+	echo "   All files in this list must have the same TR"
+	echo "   Use either a relative (e.g. ./ABC/EXY.nii.gz) or a complete path"
+	echo "    specification (e.g. /mnt/home/cjohnson/myexp/mydata/sub1.nii.gz)"
+	echo "   The text file must have a .txt extension"
+	echo "To process a single file simply provide the name of the file."
+	echo "   using either a relative or complete path specification"
+	}
+
+
+UNIQUEID=${BASHPID}
+
+#
+#
+# test number and value of arguments
+
+
+if [ $# -lt 2 ]; then
+	clear
+	echo ====================================
+	echo   Two arguments required
+	echo ====================================
+	USAGE ;
+	exit
+fi
+
+if [ ! -e ${1} ] ; then
+	clear
+	echo ""
+	echo ====================================
+	echo The file ${1} does not exist
+	echo ====================================
+	echo 
+	USAGE ;
+	exit
+fi
+# get the input file's extention
+file=${1}
+ext=`echo ${file##*.}`
+
+# Load the file(s) to be processed
+if [ ${ext} == "txt" ]; then
+INPUTDATAFILES=`cat ${1}`
+else
+INPUTDATAFILES=${1}
+fi
+#echo $INPUTDATAFILES
+
+CURRENT=`pwd`
+
+if [ -e ERSN_Batch_Errors.txt ]; then
+	rm ERSN_Batch_Errors.txt
+fi
+
+# test that all input files exist
+for AFILE in ${INPUTDATAFILES};
+do
+
+# strip extension if it exists
+AFILE=`remove_ext ${AFILE}`
+
+
+if [ ! -e ${AFILE}.nii.gz ] ; then
+	echo ${AFILE}.nii.gz does not exist >> ${CURRENT}/ERSN_Batch_Errors.txt
+	continue
+fi
+
+done
+
+# Stop now if any errors exist
+if [ -e ${CURRENT}/ERSN_Batch_Errors.txt ] ; then
+	clear
+	echo
+	echo The listing of data to be processed contains errors -- see below:
+	echo
+	echo ===================
+	cat ${CURRENT}/ERSN_Batch_Errors.txt
+	echo ===================
+	echo
+	echo Please edit file ${1} and resubmit
+	exit
+fi
+
+# Primary loop starts here
+for AFILE in ${INPUTDATAFILES};
+do
+clear
+echo
+echo
+echo Working on ${AFILE}
+# strip extension if it exists
+AFILE=`remove_ext ${AFILE}`
+
+echo ...Execute Motion Correction
+mcflirt -in ${AFILE}
+echo ...Generate a tissue mask
+fslmaths ${AFILE}_mcf ${UNIQUEID}_prefiltered_func_data -odt float
+fslmaths ${UNIQUEID}_prefiltered_func_data -Tmax ${UNIQUEID}_max_func
+
+# 12/28/12 -- improve the tissue mask -- beginning
+#Previous version code
+#fslmaths ${UNIQUEID}_max_func -thr 100 -dilM -bin ${UNIQUEID}_tisssuemask
+bet ${AFILE}_mcf.nii.gz ${UNIQUEID}_brain.nii.gz
+fslmaths ${UNIQUEID}_brain.nii.gz -bin -kernel gauss 12 -ero -ero ${UNIQUEID}_brain_e2.nii.gz
+fslmaths ${UNIQUEID}_brain_e2.nii.gz -kernel gauss 12 -dilM -dilM -dilM ${UNIQUEID}_brain_e2d3.nii.gz
+fslsplit ${UNIQUEID}_brain_e2d3.nii.gz temp_slice -z
+list=`ls temp_slice*.nii.gz`
+fslmaths ${UNIQUEID}_brain_e2d3.nii.gz -Zmax temp_base.nii.gz
+for temp in ${list}
+do
+	cp temp_base.nii.gz ${temp}
+done
+mergelist=`ls temp_slice*.nii.gz`
+fslmerge -z ${UNIQUEID}_max_brain.nii.gz ${mergelist}
+fslmaths ${UNIQUEID}_max_brain.nii.gz -bin ${UNIQUEID}_tissuemask
+rm -rf temp*
+# 12/28/12 -- improve the non-tissue mask -- end
+
+echo ...Generate a non-tissue mask
+fslmaths ${UNIQUEID}_tissuemask -dilM -eroF -mul -1 -add 1 -mul ${UNIQUEID}_max_func -bin -eroF ${UNIQUEID}_outofbodymask
+
+echo ...Create a background image
+fslmaths ${UNIQUEID}_max_func -mul ${UNIQUEID}_tissuemask ${UNIQUEID}_backgroundimage
+
+echo ...Limit input to out of body data
+fslmaths ${UNIQUEID}_prefiltered_func_data -mul ${UNIQUEID}_outofbodymask ${UNIQUEID}_OutOfBodyData
+
+echo ...Use melodic but turn off masking and background threshholding
+if [ -d ${AFILE}_mcf_OutOfBody.ica ]; then
+	rm -fr ${AFILE}_mcf_OutOfBody.ica
+fi
+
+melodic -i ${UNIQUEID}_OutOfBodyData -o ${AFILE}_mcf_OutOfBody.ica --bgimage=${UNIQUEID}_backgroundimage.nii.gz --nomask --nobet --tr=${2} --mmthresh=0.5 --report
+
+echo ...Move into the resulting ica folder
+cd ${AFILE}_mcf_OutOfBody.ica
+
+# move into the report folder
+cd report
+
+echo ...Copy all time courses into a single file
+# retain order of ICs in generated text file -- cols == ICs rows==vols
+paste -d " " t?.txt > tmp1.txt
+if [ -e t10.txt ]; then
+	paste -d " " t??.txt > tmp2.txt
+fi
+if [ -e t100.txt ]; then
+	paste -d " " t???.txt > tmp3.txt
+fi
+paste tmp*.txt > tmp4.txt
+# remove extra space(s) b/w fields
+cat tmp4.txt | sed 's/   / /g' > timecoursedata.txt
+rm tmp*.txt
+
+# retain order of ICs in generated text file -- cols == ICs rows==vols
+paste -d " " f?.txt > tmp1.txt
+if [ -e f10.txt ]; then
+	paste -d " " f??.txt > tmp2.txt
+fi
+if [ -e f100.txt ]; then
+	paste -d " " f???.txt > tmp3.txt
+fi
+paste tmp*.txt > tmp4.txt
+# remove extra space(s) b/w fields
+cat tmp4.txt | sed 's/   / /g' > freqpowerdata.txt
+rm tmp*.txt
+
+echo ...Determine number of spiked ICs and plot Scanner Noise Envelope
+
+if [ -e ScannerNoiseEnvelope.png ]; then
+	rm ScannerNoiseEnvelope.png
+fi
+if [ -e sourcefilename.txt ]; then
+	rm sourcefilename.txt
+fi
+
+# Store file name for use by octave -- but strip "_" characters
+#	because the font mapping is strange in the octave print routine
+echo ${AFILE}_mcf | sed 's/_/-/g' > sourcefilename.txt
+NumSpikes=`octave -q ${DOTMFILELOCAT}/ibicERSNtstv2_3.m | awk '{print $3}'`
+
+STRIPPEDFNAME=`echo ${AFILE}_mcf | sed 's:/:+:g'`
+if [ -e ${CURRENT}/${STRIPPEDFNAME}_ScannerNoiseEnvelope.png ]; then
+	rm ${CURRENT}/${STRIPPEDFNAME}_ScannerNoiseEnvelope.png
+fi
+if [ -e ${CURRENT}/${STRIPPEDFNAME}_ERSNMaxPowerSpectrum.png ]; then
+	rm ${CURRENT}/${STRIPPEDFNAME}_ERSNMaxPowerSpectrum.png
+fi
+
+cp ScannerNoiseEnvelope.png ${CURRENT}/${STRIPPEDFNAME}_ScannerNoiseEnvelope.png
+cp MaxPowerSpectrum.png ${CURRENT}/${STRIPPEDFNAME}_ERSNMaxPowerSpectrum.png
+# back out of report folder
+cd ..
+NumICs=`fslnvols melodic_IC`
+
+# return to calling folder
+cd ${CURRENT}
+
+echo ${NumICs} ${NumSpikes} ${AFILE}_mcf >> ERSN_Batch_Results.txt
+
+echo ...Generate a comma delimited list from 1 to ${NumICs}
+ICsToRemove=`seq -s , ${NumICs}`
+
+echo ...Remove all ICs found in the out of body data
+# Note -- using the float version of the data as input
+fsl_regfilt -i ${UNIQUEID}_prefiltered_func_data -o ${AFILE}_mcf_SNRemoved -d ${AFILE}_mcf_OutOfBody.ica/melodic_mix -f "${ICsToRemove}"
+
+echo ...Clean up files
+rm ${UNIQUEID}_*
+done
+
+echo 
+echo ==============
+echo
+echo "Results of ibicERSN: <ICs> <SpikedICs> <filename>"
+cat ERSN_Batch_Results.txt
