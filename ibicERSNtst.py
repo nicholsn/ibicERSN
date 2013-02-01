@@ -12,40 +12,35 @@ TR = 2.0
 
 # Execute Motion Correction
 # mcflirt -in ${AFILE}
-mcflirter = pe.Node(interface=fsl.MCFLIRT(), name="mcflirt")
+mcflirter = pe.Node(interface=fsl.MCFLIRT(), name="Mcflirt")
 
 # Generate a tissue mask
 # fslmaths ${AFILE}_mcf ${UNIQUEID}_prefiltered_func_data -odt float
-floater = pe.Node(interface=maths.ChangeDataType(), name="mcf2float")
-floater._suffix = "_prefiltered_func_data"
+floater = pe.Node(interface=maths.ChangeDataType(), name="Mcf2float")
 floater.inputs.output_datatype = "float"
 
 # fslmaths ${UNIQUEID}_prefiltered_func_data -Tmax ${UNIQUEID}_max_func
 tmaxer = pe.Node(interface=maths.MaxImage(), name="Tmax")
-tmaxer._suffix = "_max_func"
 tmaxer.dimension = "T"
 
 # bet ${AFILE}_mcf.nii.gz ${UNIQUEID}_brain.nii.gz
-better = pe.Node(interface=fsl.BET(), name="bet")
-better._suffix = '_brain' 
+better = pe.Node(interface=fsl.BET(), name="Bet")
 
 # fslmaths ${UNIQUEID}_brain.nii.gz -bin -kernel gauss 12 -ero -ero ${UNIQUEID}_brain_e2.nii.gz
-eroder = pe.Node(interface=maths.MultiImageMaths(), name="erode")
-eroder.inputs.op_string = "-bin -kernel gauss 12 -ero -ero"
-eroder._suffix = "_ero2"
+eroder = pe.Node(interface=maths.MathsCommand(), name="Erode")
+eroder.inputs.args = "-bin -kernel gauss 12 -ero -ero"
 
 # fslmaths ${UNIQUEID}_brain_e2.nii.gz -kernel gauss 12 -dilM -dilM -dilM ${UNIQUEID}_brain_e2d3.nii.gz
-dilator = pe.Node(interface=maths.MultiImageMaths(), name="dilate")
-dilator.inputs.op_string = "-kernel gauss 12 -dilM -dilM -dilM"
-dilator._suffix = "_dil3"
+dilator = pe.Node(interface=maths.MathsCommand(), name="Dilate")
+dilator.inputs.args = "-kernel gauss 12 -dilM -dilM -dilM"
 
 # fslsplit ${UNIQUEID}_brain_e2d3.nii.gz temp_slice -z
-splitter = pe.Node(interface=fsl.Split(), name="split")
+splitter = pe.Node(interface=fsl.Split(), name="Split")
 splitter.inputs.dimension = "z"
 splitter.inputs.out_base_name = "temp_slice"
 
 # fslmaths ${UNIQUEID}_brain_e2d3.nii.gz -Zmax temp_base.nii.gz
-zmaxer = pe.Node(interface=maths.MaxImage(), name="Zmax")
+zmaxer = pe.MapNode(interface=maths.MaxImage(), name="Zmax", iterfield=['in_file'])
 zmaxer.dimension = "Z"
 
 # fslmerge -z ${UNIQUEID}_max_brain.nii.gz ${mergelist}
@@ -53,29 +48,23 @@ merger = pe.Node(interface=fsl.Merge(), name="Merge")
 merger.inputs.dimension = "z"
 
 # fslmaths ${UNIQUEID}_max_brain.nii.gz -bin ${UNIQUEID}_tissuemask
-maxbiner = pe.Node(interface=maths.UnaryMaths(), name="max2binary")
-maxbiner.operation = "bin"
+maxbiner = pe.Node(interface=maths.UnaryMaths(), name="Max2binary")
+maxbiner.inputs.operation = "bin"
 
 # Generate a non-tissue mask
 # fslmaths ${UNIQUEID}_tissuemask -dilM -eroF -mul -1 -add 1 -mul ${UNIQUEID}_max_func -bin -eroF ${UNIQUEID}_outofbodymask
-outbodymasker = pe.Node(interface=maths.MultiImageMaths(), name="outofbodymask")
+outbodymasker = pe.Node(interface=maths.MultiImageMaths(), name="Outofbodymask")
 outbodymasker.inputs.op_string = "-dilM -eroF -mul -1 -add 1 -mul %s -bin -eroF"
-outbodymasker.inputs.operand_files = ['_max_func']
-outbodymasker._suffix = "_outofbodymask"
 
 # Create a background image
 # fslmaths ${UNIQUEID}_max_func -mul ${UNIQUEID}_tissuemask ${UNIQUEID}_backgroundimage
-bgimager = pe.Node(interface=maths.MultiImageMaths(), name="backgroundimage")
+bgimager = pe.Node(interface=maths.MultiImageMaths(), name="Backgroundimage")
 bgimager.inputs.op_string = "-mul %s"
-bgimager.inputs.operand_files = ['_tissuemask']
-bgimager._suffix = "_backgroundimage"
 
 # Limit input to out of body data
 # fslmaths ${UNIQUEID}_prefiltered_func_data -mul ${UNIQUEID}_outofbodymask ${UNIQUEID}_OutOfBodyData
 outbodier = pe.Node(interface=maths.MultiImageMaths(), name="outofbodydata")
 outbodier.inputs.op_string = "-mul %s"
-outbodier.inputs.operand_files = ['_outofbodymask']
-outbodier._suffix = "_OutOfBodyData"
 
 # Use melodic but turn off masking and background threshholding
 # melodic -i ${UNIQUEID}_OutOfBodyData -o ${AFILE}_mcf_OutOfBody.ica --bgimage=${UNIQUEID}_backgroundimage.nii.gz --nomask --nobet --tr=${2} --mmthresh=0.5 --report
@@ -85,14 +74,72 @@ melodicor.inputs.no_bet = True
 melodicor.inputs.tr_sec = TR
 melodicor.inputs.mm_thresh = 0.5
 melodicor.inputs.report = True
-melodicor._suffix = "_mcf_OutOfBody.ica"
 
 # connect all fsl commands into a workflow
 workflow = pe.Workflow(name="ERSN")
 workflow.base_dir = "."
 
-workflow.add_nodes([mcflirter,]) # this makes a node run independently 
+# connect mcflirter to floater
+workflow.connect([(mcflirter,floater, 
+                   [("out_file", "in_file")])])
 
-workflow.connect(mcflirter, mcflirter.outputs.out_file, floater, floater.inputs.in_file)
+# connect floater to tmaxer
+workflow.connect([(floater, tmaxer,
+                   [("out_file", "in_file")])])
 
-workflow.run()
+# connect mcflirter to better
+workflow.connect([(mcflirter, better,
+                   [("out_file", "in_file")])])
+
+# connect better to eroder
+workflow.connect([(better, eroder,
+                   [("out_file", "in_file")])])
+
+# connect eroder to dilator
+workflow.connect([(eroder, dilator,
+                   [("out_file", "in_file")])])
+
+# connect dilator to splitter
+workflow.connect([(dilator, splitter,
+                   [("out_file", "in_file")])])
+
+# connect splitter to zmaxer
+workflow.connect([(splitter, zmaxer,
+                   [("out_files", "in_file")])])
+
+# connect zmaxer to merger
+workflow.connect([(zmaxer, merger,
+                   [("out_file", "in_files")])])
+
+# connect zmaxer to merger
+workflow.connect([(merger, maxbiner,
+                   [("merged_file", "in_file")])])
+
+# connect maxbiner and tmaxer to to outbodymasker
+workflow.connect([(maxbiner, outbodymasker,
+                   [("out_file", "in_file")]),
+                  (tmaxer, outbodymasker,
+                      [('out_file', 'operand_files')])])
+
+# connect tmaxer and maxbiner to bgimager
+workflow.connect([(tmaxer, bgimager,
+                   [("out_file", "in_file")]),
+                  (maxbiner, bgimager,
+                   [('out_file', 'operand_files')])])
+
+# connect tmaxer and maxbiner to outbodier
+workflow.connect([(floater, outbodier,
+                   [("out_file", "in_file")]),
+                  (outbodymasker, outbodier,
+                   [('out_file', 'operand_files')])])
+
+# connect outbodier and bgimager to melodicor
+workflow.connect([(outbodier, melodicor,
+                   [("out_file", "in_files")]),
+                  (bgimager, melodicor,
+                   [('out_file', 'bg_image')])])
+
+if __name__ == '__main__':
+    workflow.write_graph()
+    workflow.run()
+    workflow.run(plugin='MultiProc', plugin_args={'n_procs':2})
