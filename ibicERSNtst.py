@@ -187,9 +187,54 @@ def get_melodicdata(melodic_dir, data_type="timeseries"):
     ts_frame.to_csv(data_filename,header=False, index=False)
     print "wrote file: " + data_filename
     return data_filename
-      
+
+def plot_scannernoiseenvelope(timeseriesdata, spike_thresh=None, savefig=True):
+    """
+    plot the scanner noise envelope
     
-    
+    timeseriesdata : csv file of ica time series
+    spike_thresh   : normalized response threshold for spike identification
+    savefig        : save ScannerNoiseEnvelope.png
+    """
+
+    # load the timeseries
+    ts = pd.read_csv(timeseriesdata)
+
+    # count the number of ICs
+    number_of_ics = ts.columns.size
+
+    # get an index to the ICs with spikes
+    ic_max = ts.max()
+    if spike_thresh is None:
+        spike_thresh = 4 # default is 4
+    spikes = ic_max[ic_max > spike_thresh]
+
+    ## Plotting the ScannerNoiseEnvelope ##
+
+    # get the max value across ICs at each timepoint
+    top = ts.T.max()
+    bottom = ts.T.min()
+
+    # plot labels
+    plt.title("Scanner Noise Envelope for file: %s" % timeseriesdata)
+    plt.xlabel("Volumes")
+    plt.ylabel("Normalized Response")
+
+    # plot scaling
+    plt.xlim(0,top.size)
+
+    # draw the plot by filling the space between the top and bottom values 
+    plt.fill_between(top.size, top.values, bottom.values)
+
+    # could also do a layover of spiked ICs and add them to a legend key
+    # for ic_idx in spikes.keys():
+    #     plt.plot(ts[ic_idx], color='r')
+
+    # save the figure 
+    if savefig is True:
+        envelope_png = os.path.join(melodic_dir, "report/",'ScannerNoiseEnvelope.png')
+        plt.savefig(envelope_png,format='png')
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
