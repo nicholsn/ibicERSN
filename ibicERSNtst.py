@@ -1,4 +1,3 @@
-
 """
 IBIC Extract Remove Scanner Noise
 """
@@ -88,7 +87,7 @@ workflow = pe.Workflow(name="ERSN")
 workflow.base_dir = "."
 
 # connect mcflirter to floater
-workflow.connect([(mcflirter,floater,
+workflow.connect([(mcflirter, floater,
                    [("out_file", "in_file")])])
 
 # connect floater to tmaxer
@@ -147,17 +146,17 @@ workflow.connect([(outbodier, melodicor,
                   (bgimager, melodicor,
                    [('out_file', 'bg_image')])])
 
+
 def get_melodicdata(melodic_dir, data_type="timeseries"):
     """
     Compile all timecourse components
-    
     melodic_dir = melodic directry (str)
     ts_type = type of timeseries to extract (timeseries or freqpower) 
     """
+
     def natural_key(astr):
         """
         Sort strings ending in integers using a natural numerical order
-        
         See http://stackoverflow.com/questions/34518/natural-sorting-algorithm
         """
         return [int(s) if s.isdigit() else s for s in re.split(r'(\d+)', astr)]
@@ -171,7 +170,7 @@ def get_melodicdata(melodic_dir, data_type="timeseries"):
         print "Please choose a supported data_type [timeseries, freqpower]"
 
     melodic_dir = os.path.abspath(melodic_dir)
-    ts_files = glob.glob(os.path.join(melodic_dir,'report/'+ TS_TYPE +'*.txt'))
+    ts_files = glob.glob(os.path.join(melodic_dir, 'report/' + TS_TYPE + '*.txt'))
     ts_files.sort(key=natural_key)
 
     # keep the timecourse order
@@ -184,14 +183,14 @@ def get_melodicdata(melodic_dir, data_type="timeseries"):
         else:
             ts_frame = ts_frame.join(ts_series)
     data_filename = os.path.join(melodic_dir, "report/" + data_type + "data.csv")
-    ts_frame.to_csv(data_filename,header=False, index=False)
+    ts_frame.to_csv(data_filename, header=False, index=False)
     print "wrote file: " + data_filename
     return data_filename
+
 
 def plot_scannernoiseenvelope(timeseriesdata, spike_thresh=None, savefig=True):
     """
     plot the scanner noise envelope
-    
     timeseriesdata : csv file of ica time series
     spike_thresh   : normalized response threshold for spike identification
     savefig        : save ScannerNoiseEnvelope.png
@@ -221,7 +220,7 @@ def plot_scannernoiseenvelope(timeseriesdata, spike_thresh=None, savefig=True):
     plt.ylabel("Normalized Response")
 
     # plot scaling
-    plt.xlim(0,top.size)
+    plt.xlim(0, top.size)
 
     # draw the plot by filling the space between the top and bottom values 
     plt.fill_between(top.size, top.values, bottom.values)
@@ -232,14 +231,16 @@ def plot_scannernoiseenvelope(timeseriesdata, spike_thresh=None, savefig=True):
 
     # save the figure 
     if savefig is True:
-        envelope_png = os.path.join(melodic_dir, "report/",'ScannerNoiseEnvelope.png')
-        plt.savefig(envelope_png,format='png')
+        envelope_png = os.path.join(melodic_dir, "report/", 'ScannerNoiseEnvelope.png')
+        plt.savefig(envelope_png, format='png')
+
 
 if __name__ == '__main__':
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.description = "IBIC Extract Remove Scanner Noise (ERSN) Utility"
-    
+
     workflow.write_graph()
     workflow.run()
-    workflow.run(plugin='MultiProc', plugin_args={'n_procs':2})
+    workflow.run(plugin='MultiProc', plugin_args={'n_procs': 2})
