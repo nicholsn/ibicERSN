@@ -70,7 +70,7 @@ INPUTDATAFILES=${1}
 fi
 #echo $INPUTDATAFILES
 
-CURRENT=`pwd`
+CURRENT=`pwd | sed 's/ /\\ /g'`
 
 if [ -e ERSN_Batch_Errors.txt ]; then
 	rm ERSN_Batch_Errors.txt
