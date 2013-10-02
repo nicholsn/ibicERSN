@@ -2,7 +2,7 @@
 
 DOTMFILELOCAT="/mnt/home/ibic/bin"
 PURPOSE="Explore-Remove-Scanner-Noise" ;
-PGM="ibicERSN -- Version 2.2" ;
+PGM="ibicERSN -- Version 3.0" ;
 
 	USAGE(){
 	echo "Program:  ${PGM}"
@@ -12,6 +12,7 @@ PGM="ibicERSN -- Version 2.2" ;
 	echo "12/29/12 --         2.1  Fixed Batch Processing Bug & added McFlirt"
 	echo "12/29/12 -- 	  2.2  Reworked non-tissue mask"
 	echo "06/21/13                 Test for FSL version 4"
+	echo "06/28/13 --         3.0  New way to define outofbodymask"
 	echo "================================================================="
 	echo "Usage: "
 	echo " ibicERSN <File | List> <tr> "
@@ -121,28 +122,49 @@ echo ...Generate a tissue mask
 fslmaths ${AFILE}_mcf ${UNIQUEID}_prefiltered_func_data -odt float
 fslmaths ${UNIQUEID}_prefiltered_func_data -Tmax ${UNIQUEID}_max_func
 
-# 12/28/12 -- improve the tissue mask -- beginning
-#Previous version code
-#fslmaths ${UNIQUEID}_max_func -thr 100 -dilM -bin ${UNIQUEID}_tisssuemask
 bet ${AFILE}_mcf.nii.gz ${UNIQUEID}_brain.nii.gz
-fslmaths ${UNIQUEID}_brain.nii.gz -bin -kernel gauss 12 -ero -ero ${UNIQUEID}_brain_e2.nii.gz
-fslmaths ${UNIQUEID}_brain_e2.nii.gz -kernel gauss 12 -dilM -dilM -dilM ${UNIQUEID}_brain_e2d3.nii.gz
-fslsplit ${UNIQUEID}_brain_e2d3.nii.gz temp_slice -z
-list=`ls temp_slice*.nii.gz`
-fslmaths ${UNIQUEID}_brain_e2d3.nii.gz -Zmax temp_base.nii.gz
-for temp in ${list}
-do
-	cp temp_base.nii.gz ${temp}
+
+# 6/26/13 -- Generate Tissue mask and minimize ghosting from eyes 
+#         -- Make this much simplier & faster!!
+fslsplit ${UNIQUEID}_brain.nii.gz ${UNIQUEID}_temp_slice -z
+mergelist=`ls ${UNIQUEID}_temp_slice*.nii.gz`
+# set size of gauss kernel used in all -dilM operations
+GAUSKERN=12
+
+# collapse in Z direction -- keep max value
+fslmaths ${UNIQUEID}_brain.nii.gz -Zmax ${UNIQUEID}_temp_base_0.nii.gz
+
+# dialate this image to avoid eye blinking ghosts
+fslmaths ${UNIQUEID}_temp_base_0.nii.gz -kernel gauss ${GAUSKERN} -dilM ${UNIQUEID}_temp_base_1
+REFVOXCOUNT=0;
+for temp in ${mergelist}; do
+#echo `fslstats $temp -V `
+CURRENTVOXCOUNT=`fslstats $temp -V | awk '{print $1}'`
+#echo $REFVOXCOUNT $CURRENTVOXCOUNT $temp
+
+if [ ${CURRENTVOXCOUNT} -eq 0 ]; then
+# slice has no brain tissue
+# use temp as is -- skip to next slice
+#echo zero
+continue
+elif [ ${CURRENTVOXCOUNT} -gt ${REFVOXCOUNT} ]; then
+#echo "set to max_func"
+# replace slices with temp_base_1 if slice vol is asending
+# while moving up in Z direction
+	cp ${UNIQUEID}_temp_base_1.nii.gz ${temp}
+else
+#echo dilating this slice
+# replace all other of slices with dilM of temp
+	fslmaths ${temp} -kernel gauss ${GAUSKERN}  -dilM ${temp}
+fi
+REFVOXCOUNT=${CURRENTVOXCOUNT}
 done
-mergelist=`ls temp_slice*.nii.gz`
 fslmerge -z ${UNIQUEID}_max_brain.nii.gz ${mergelist}
 fslmaths ${UNIQUEID}_max_brain.nii.gz -bin ${UNIQUEID}_tissuemask
-rm -rf temp*
-# 12/28/12 -- improve the tissue mask -- end
-
+rm -rf ${UNIQUEID}_temp*
 echo ...Generate a non-tissue mask
-fslmaths ${UNIQUEID}_tissuemask -dilM -eroF -mul -1 -add 1 -mul ${UNIQUEID}_max_func -bin -eroF ${UNIQUEID}_outofbodymask
-
+fslmaths ${UNIQUEID}_tissuemask -mul -1 -add 1 -mul ${UNIQUEID}_max_func -bin ${UNIQUEID}_outofbodymask
+# 6/26/13 end
 echo ...Create a background image
 fslmaths ${UNIQUEID}_max_func -mul ${UNIQUEID}_tissuemask ${UNIQUEID}_backgroundimage
 
@@ -207,9 +229,6 @@ STRIPPEDFNAME=`echo ${AFILE}_mcf | sed 's:/:+:g'`
 if [ -e ${CURRENT}/${STRIPPEDFNAME}_ScannerNoiseEnvelope.png ]; then
 	rm ${CURRENT}/${STRIPPEDFNAME}_ScannerNoiseEnvelope.png
 fi
-if [ -e ${CURRENT}/${STRIPPEDFNAME}_ERSNMaxPowerSpectrum.png ]; then
-	rm ${CURRENT}/${STRIPPEDFNAME}_ERSNMaxPowerSpectrum.png
-fi
 
 cp ScannerNoiseEnvelope.png ${CURRENT}/${STRIPPEDFNAME}_ScannerNoiseEnvelope.png
 
@@ -230,7 +249,7 @@ echo ...Remove all ICs found in the out of body data
 fsl_regfilt -i ${UNIQUEID}_prefiltered_func_data -o ${AFILE}_mcf_SNRemoved -d ${AFILE}_mcf_OutOfBody.ica/melodic_mix -f "${ICsToRemove}"
 
 echo ...Clean up files
-rm ${UNIQUEID}_*
+#rm ${UNIQUEID}_*
 done
 
 echo 
